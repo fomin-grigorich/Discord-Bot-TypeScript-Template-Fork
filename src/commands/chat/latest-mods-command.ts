@@ -17,17 +17,22 @@ export class LatestModsCommand implements Command {
     public requireClientPerms: PermissionsString[] = [];
 
     public async execute(intr: ChatInputCommandInteraction, data: EventData): Promise<void> {
-        this.getMods().then(html => {
-            this.parseHTML(html)
+        const html = await this.getMods();
+        const links = html ? await this.parseHTML(html) : [];
+        if (links.length) {
+            links.forEach(link => InteractionUtils.send(intr, link));
+        } else {
             InteractionUtils.send(intr, Lang.getEmbed('displayEmbeds.latest', data.lang));
-        })
+        }
     }
 
     private getMods(): Promise<string> {
-        return fetch('https://www.moddb.com/mods/stalker-anomaly/addons?sort=date-desc').then(res => res.text());
+        return fetch('https://www.moddb.com/mods/stalker-anomaly/addons?sort=date-desc')
+            .then(res => res.text() || '')
+            .catch(() => '');
     }
 
-    private parseHTML(html: string): void {
+    private parseHTML(html: string): Promise<string[]> {
         const $ = cheerio.load(html);
         const mods: IMod[] = [];
         let id = new Date().getTime();
@@ -40,10 +45,10 @@ export class LatestModsCommand implements Command {
             id++; // Keep ID as uniq number
         });
 
-        this.addModsToDB(mods);
+        return mods.length ? this.addModsToDB(mods) : Promise.resolve([]);
     }
 
-    private async addModsToDB(mods: IMod[]): Promise<void> {
+    private async addModsToDB(mods: IMod[]): Promise<string[]> {
         try {
             const maximumStorageCount = 100;
             // Initialize LowDB access
@@ -71,7 +76,7 @@ export class LatestModsCommand implements Command {
 
             // Check new mods for existence in LowDB
             const existingLinks = db.data.mods.length ? db.data.mods.map(i => i.link) : [];
-            const newMods = existingLinks.length ? mods.filter(i => !existingLinks.includes(i.link)) : [];
+            const newMods = mods.filter(i => !existingLinks.includes(i.link));
 
             // Add new mods to LowDB
             if (newMods.length) {
@@ -81,10 +86,13 @@ export class LatestModsCommand implements Command {
                     console.log(`${i.title} added to LowDB at ${date}`);
                 });
                 await db.write();
+                return newMods.map(i => i.link);
             }
         } catch (e) {
             console.error(e);
         }
+
+        return [];
     }
 }
 
