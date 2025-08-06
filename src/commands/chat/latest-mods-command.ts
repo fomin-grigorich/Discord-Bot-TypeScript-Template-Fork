@@ -1,6 +1,8 @@
 import * as cheerio from 'cheerio';
 import { ChatInputCommandInteraction, PermissionsString } from 'discord.js';
 import { RateLimiter } from 'discord.js-rate-limiter';
+import { Low } from 'lowdb'
+import { JSONFile } from 'lowdb/node'
 
 import { Language } from '../../models/enum-helpers/index.js';
 import { EventData } from '../../models/internal-models.js';
@@ -27,16 +29,67 @@ export class LatestModsCommand implements Command {
 
     private parseHTML(html: string): void {
         const $ = cheerio.load(html);
+        const mods: IMod[] = [];
+        let id = new Date().getTime();
 
-        // Find all elements with class 'rowcontent'
-        const addons: string[] = [];
-
-        $('.rowcontent').each((_, element) => {
-            const title = $(element).find('a').text().trim();
-            const link = 'https://www.moddb.com' + $(element).find('a').attr('href');
-            addons.push(`${title} - ${link}`);
+        $('.rowcontent').each((_, element): void => {
+            const linkElement = $(element).find('a');
+            const title = linkElement.attr('title').trim();
+            const link = 'https://www.moddb.com' + linkElement.attr('href');
+            mods.push({id, title, link});
+            id++; // Keep ID as uniq number
         });
 
-        console.log(addons);
+        this.addModsToDB(mods);
     }
+
+    private async addModsToDB(mods: IMod[]): Promise<void> {
+        try {
+            const maximumStorageCount = 100;
+            // Initialize LowDB access
+            const adapter = new JSONFile<{mods: IMod[]}>('db.json');
+            const db = new Low<{mods: IMod[]}>(adapter, null); // Not sure that defaultData as {mods: []} is useful
+            await db.read();
+
+            // Check for storage existence and create one when missing
+            if (!db.data.mods) {
+                db.data = {mods: []};
+                await db.write();
+            }
+            /**
+             * Check for storage size and remove extra elements when overloaded.
+             * Allows to keep storage size NOT larger than {@link maximumStorageCount}
+             * and removes old entries to keep storage more dynamic and up to date.
+            */
+            else if (db.data.mods.length > maximumStorageCount) {
+                const extraCount= db.data.mods.length - maximumStorageCount;
+                db.data.mods.splice(0, extraCount);
+                await db.write();
+                const date = new Date().toISOString();
+                console.log(`${extraCount} old elements removed from LowDB at ${date}`);
+            }
+
+            // Check new mods for existence in LowDB
+            const existingLinks = db.data.mods.length ? db.data.mods.map(i => i.link) : [];
+            const newMods = existingLinks.length ? mods.filter(i => !existingLinks.includes(i.link)) : [];
+
+            // Add new mods to LowDB
+            if (newMods.length) {
+                const date = new Date().toISOString();
+                newMods.forEach(i => {
+                    db.data.mods.push(i);
+                    console.log(`${i.title} added to LowDB at ${date}`);
+                });
+                await db.write();
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+}
+
+interface IMod {
+    id: number;
+    title: string;
+    link: string;
 }
