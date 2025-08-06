@@ -130,3 +130,6 @@ dist
 
 #IntellJ
 .idea/
+
+#LowDB
+/db.json
